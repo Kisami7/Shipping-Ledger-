@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>ShipLedger</title>
+<meta name="description" content="Shopping cart cost calculator with currency conversion and forwarding shipping estimates." />
+
+<!-- PWA / installable app -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#276E6A" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="ShipLedger" />
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+
+<!-- Tailwind (utility classes used throughout the app) -->
+<script src="https://cdn.tailwindcss.com"></script>
+
+<!-- Import map: bare specifiers used in app.jsx resolve to these CDN builds -->
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client?external=react",
+    "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react"
+  }
+}
+</script>
+
+<!-- In-browser JSX transform (no build step needed) -->
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+
+<style>
+  html, body { margin: 0; }
+  #root:empty::before {
+    content: "Loading ShipLedger…";
+    display: flex; align-items: center; justify-content: center;
+    height: 100vh; font-family: system-ui, sans-serif; color: #7A7466;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<noscript>ShipLedger needs JavaScript enabled to run.</noscript>
+
+<script type="text/babel" data-type="module" data-presets="react" src="app.jsx"></script>
+</body>
+</html>
