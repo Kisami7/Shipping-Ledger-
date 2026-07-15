@@ -14,7 +14,14 @@ const CURRENCIES = [
   "USD","EUR","GBP","JPY","CNY","KRW","HKD","SGD","AUD","CAD","CHF","INR",
   "THB","MYR","IDR","PHP","VND","TWD","NZD","MXN","BRL","ZAR","AED","SAR",
   "TRY","RUB","SEK","NOK","DKK","PLN","CZK","ILS","EGP","NGN","KES","PKR",
-  "BDT","ARS","CLP","COP","QAR"
+  "BDT","ARS","CLP","COP","QAR","ZMW","GHS","UGX","TZS","RWF","MAD"
+];
+
+const PLATFORMS = [
+  "Amazon","AliExpress","eBay","Temu","Shein","Rakuten","Taobao","Tmall",
+  "Etsy","Walmart","Best Buy","Newegg","Mercari","Yahoo Auctions Japan",
+  "ASOS","Zalando","Alibaba","JD.com","Coupang","Flipkart","Noon","Shopee",
+  "Wish","Target","Costco","Wayfair","iHerb"
 ];
 
 const STORAGE_KEY = "shipledger-data";
@@ -66,7 +73,8 @@ const emptyCart = () => ({
 const emptyItem = () => ({
   id: uid(), name: "", image: "", platform: "", price: "", currency: "USD",
   tax: "", note: "", weight: "", shippingType: "free",
-  fixedShippingAmount: "", fixedShippingCurrency: "USD", forwardCompanyId: ""
+  fixedShippingAmount: "", fixedShippingCurrency: "USD", forwardCompanyId: "",
+  includeInTotal: true
 });
 
 const defaultData = () => ({
@@ -143,15 +151,16 @@ function calcCartTotals(cart, rates, companies) {
   let missingRate = false;
   let missingCompany = false;
   const rows = cart.items.map((item) => {
+    const included = item.includeInTotal !== false;
     const base = calcItemCost(item);
     const baseConv = convert(base, item.currency, target, rates);
     const ship = calcItemShipping(item, companies);
-    if (!ship.ok) missingCompany = true;
+    if (!ship.ok && included) missingCompany = true;
     const shipConv = ship.amount ? convert(ship.amount, ship.currency, target, rates) : 0;
-    if (baseConv === null || (ship.amount && shipConv === null)) missingRate = true;
+    if (included && (baseConv === null || (ship.amount && shipConv === null))) missingRate = true;
     const rowTotal = (baseConv || 0) + (shipConv || 0);
-    subtotal += rowTotal;
-    return { item, base, shipAmount: ship.amount, shipCurrency: ship.currency, rowTotal };
+    if (included) subtotal += rowTotal;
+    return { item, base, shipAmount: ship.amount, shipCurrency: ship.currency, rowTotal, included };
   });
   let feeAmount = 0;
   if (cart.cardFeeType === "percent") {
@@ -235,6 +244,7 @@ function Modal({ title, onClose, children, wide }) {
 
 function ImageThumb({ src, size = 44, rounded = "rounded-lg" }) {
   const [errored, setErrored] = useState(false);
+  useEffect(() => setErrored(false), [src]);
   if (!src || errored) {
     return (
       <div className={`shrink-0 ${rounded} bg-[var(--surface-2)] border border-[var(--border)] flex items-center justify-center text-[var(--muted)]`} style={{ width: size, height: size }}>
@@ -244,10 +254,39 @@ function ImageThumb({ src, size = 44, rounded = "rounded-lg" }) {
   }
   return (
     <img
-      src={src} alt="" onError={() => setErrored(true)}
+      src={src} alt="" referrerPolicy="no-referrer" onError={() => setErrored(true)}
       className={`shrink-0 ${rounded} object-cover border border-[var(--border)]`}
       style={{ width: size, height: size }}
     />
+  );
+}
+
+function CoverImage({ src }) {
+  const [errored, setErrored] = useState(false);
+  useEffect(() => setErrored(false), [src]);
+  if (!src || errored) {
+    return (
+      <div className="w-full h-full flex items-center justify-center text-[var(--muted)]">
+        <ImageIcon size={26} />
+      </div>
+    );
+  }
+  return <img src={src} alt="" referrerPolicy="no-referrer" onError={() => setErrored(true)} className="w-full h-full object-cover" />;
+}
+
+function Checkbox({ checked, onChange, label }) {
+  return (
+    <button
+      type="button"
+      onClick={onChange}
+      aria-label={label}
+      aria-pressed={checked}
+      className={`shrink-0 w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${
+        checked ? "bg-[var(--accent)] border-[var(--accent)]" : "border-[var(--border)] bg-[var(--surface)]"
+      }`}
+    >
+      {checked && <Check size={13} className="text-white" />}
+    </button>
   );
 }
 
@@ -276,11 +315,23 @@ function ItemForm({ initial, companies, onSave, onClose, onDelete }) {
       <Field label="Item name">
         <TextInput value={item.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Wireless keyboard" />
       </Field>
-      <Field label="Image URL" hint="Paste a link to an image of the item">
+      <Field label="Image URL" hint="Paste a direct link to an image (must start with https:// and point straight at the image file)">
         <TextInput value={item.image} onChange={(e) => set("image", e.target.value)} placeholder="https://…" />
       </Field>
+      {item.image && (
+        <div className="mb-3 flex items-center gap-2">
+          <ImageThumb src={item.image} size={72} rounded="rounded-lg" />
+          <span className="text-xs text-[var(--muted)]">Preview — if this stays blank, the link isn't a direct image file or the site blocks hotlinking.</span>
+        </div>
+      )}
       <Field label="Shopping platform">
-        <TextInput value={item.platform} onChange={(e) => set("platform", e.target.value)} placeholder="e.g. Amazon, Rakuten, Taobao" />
+        <input
+          list="platform-list" value={item.platform} onChange={(e) => set("platform", e.target.value)}
+          className={inputCls} placeholder="e.g. Amazon, Rakuten, Taobao"
+        />
+        <datalist id="platform-list">
+          {PLATFORMS.map((p) => <option value={p} key={p} />)}
+        </datalist>
       </Field>
 
       <div className="grid grid-cols-2 gap-3">
@@ -476,13 +527,7 @@ function CartsScreen({ carts, onOpen, onNew }) {
               className="text-left rounded-xl border border-[var(--border)] bg-[var(--surface)] overflow-hidden hover:border-[var(--accent)] transition-colors group"
             >
               <div className="h-28 bg-[var(--surface-2)] relative overflow-hidden">
-                {cart.image ? (
-                  <img src={cart.image} alt="" className="w-full h-full object-cover" onError={(e) => { e.target.style.display = "none"; }} />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-[var(--muted)]">
-                    <ImageIcon size={26} />
-                  </div>
-                )}
+                <CoverImage src={cart.image} />
               </div>
               <div className="p-3">
                 <div className="font-medium text-[var(--text)] truncate">{cart.name}</div>
@@ -499,8 +544,68 @@ function CartsScreen({ carts, onOpen, onNew }) {
   );
 }
 
-function CartDetailScreen({ cart, companies, rates, onBack, onEditMeta, onUpdateCart, onOpenItem, onNewItem, onDeleteItem }) {
+function CopyItemsModal({ carts, currentCartId, count, onCancel, onConfirm }) {
+  const targets = carts.filter((c) => c.id !== currentCartId);
+  return (
+    <Modal title={`Copy ${count} item${count !== 1 ? "s" : ""} to…`} onClose={onCancel}>
+      {targets.length === 0 ? (
+        <p className="text-sm text-[var(--muted)]">You'll need another cart first — go back and create one, then come copy these items over.</p>
+      ) : (
+        <div className="space-y-2">
+          {targets.map((c) => (
+            <button
+              key={c.id} onClick={() => onConfirm(c.id)}
+              className="w-full flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 text-left hover:border-[var(--accent)] transition-colors"
+            >
+              <ImageThumb src={c.image} size={36} />
+              <div className="flex-1 min-w-0">
+                <div className="font-medium truncate">{c.name}</div>
+                <div className="text-xs text-[var(--muted)]">{c.items.length} item{c.items.length !== 1 ? "s" : ""}</div>
+              </div>
+              <ChevronRight size={16} className="text-[var(--muted)]" />
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="flex justify-end mt-4">
+        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+      </div>
+    </Modal>
+  );
+}
+
+function CartDetailScreen({ cart, carts, companies, rates, onBack, onEditMeta, onUpdateCart, onOpenItem, onNewItem, onCopyItems }) {
   const totals = calcCartTotals(cart, rates, companies);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [showCopyModal, setShowCopyModal] = useState(false);
+
+  function toggleInclude(item, e) {
+    e.stopPropagation();
+    onUpdateCart({
+      ...cart,
+      items: cart.items.map((i) => (i.id === item.id ? { ...i, includeInTotal: i.includeInTotal === false } : i))
+    });
+  }
+
+  function toggleSelected(id) {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelected(new Set());
+  }
+
+  function handleConfirmCopy(targetCartId) {
+    onCopyItems(Array.from(selected), targetCartId);
+    setShowCopyModal(false);
+    exitSelectMode();
+  }
 
   return (
     <div className="p-4 sm:p-6 pb-28">
@@ -519,6 +624,11 @@ function CartDetailScreen({ cart, companies, rates, onBack, onEditMeta, onUpdate
           </div>
           <div className="text-xs text-[var(--muted)]">{cart.items.length} item{cart.items.length !== 1 ? "s" : ""}</div>
         </div>
+        {cart.items.length > 0 && (
+          <Button variant={selectMode ? "subtle" : "ghost"} onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}>
+            {selectMode ? "Cancel" : "Select"}
+          </Button>
+        )}
         <Button onClick={onNewItem}><Plus size={16} /> Add item</Button>
       </div>
 
@@ -528,28 +638,56 @@ function CartDetailScreen({ cart, companies, rates, onBack, onEditMeta, onUpdate
         </div>
       ) : (
         <div className="space-y-2 mb-6">
-          {totals.rows.map(({ item, rowTotal }) => (
-            <button
-              key={item.id} onClick={() => onOpenItem(item)}
-              className="w-full flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3 text-left hover:border-[var(--accent)] transition-colors"
-            >
-              <ImageThumb src={item.image} />
-              <div className="flex-1 min-w-0">
-                <div className="font-medium truncate">{item.name}</div>
-                <div className="text-xs text-[var(--muted)] flex items-center gap-1.5 flex-wrap">
-                  {item.platform && <span>{item.platform}</span>}
-                  <span className="font-[JetBrains_Mono,monospace]">{formatMoney(num(item.price) * (1 + num(item.tax) / 100), item.currency)}</span>
-                  {item.shippingType === "forward" && (
-                    <span className="inline-flex items-center gap-0.5 text-[var(--accent-2)]"><Truck size={11} /> forwarded</span>
+          {totals.rows.map(({ item, rowTotal, included }) => {
+            const isSelected = selected.has(item.id);
+            return (
+              <div
+                key={item.id}
+                onClick={() => (selectMode ? toggleSelected(item.id) : onOpenItem(item))}
+                className={`w-full flex items-start gap-3 rounded-xl border p-3 text-left cursor-pointer transition-colors ${
+                  selectMode && isSelected
+                    ? "border-[var(--accent)] bg-[var(--accent)]/5"
+                    : "border-[var(--border)] bg-[var(--surface)] hover:border-[var(--accent)]"
+                } ${!included && !selectMode ? "opacity-50" : ""}`}
+              >
+                {selectMode ? (
+                  <div className="mt-1"><Checkbox checked={isSelected} onChange={() => toggleSelected(item.id)} label="Select item" /></div>
+                ) : (
+                  <div className="mt-1" onClick={(e) => toggleInclude(item, e)}>
+                    <Checkbox checked={included} onChange={() => {}} label="Include in total" />
+                  </div>
+                )}
+                <ImageThumb src={item.image} />
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium break-words">{item.name}</div>
+                  <div className="text-xs text-[var(--muted)] flex items-center gap-1.5 flex-wrap mt-0.5">
+                    {item.platform && <span>{item.platform}</span>}
+                    <span className="font-[JetBrains_Mono,monospace]">{formatMoney(num(item.price) * (1 + num(item.tax) / 100), item.currency)}</span>
+                    {item.shippingType === "forward" && (
+                      <span className="inline-flex items-center gap-0.5 text-[var(--accent-2)]"><Truck size={11} /> forwarded</span>
+                    )}
+                    {item.shippingType === "free" && <span>free shipping</span>}
+                    {!included && <span className="text-[var(--danger)]">excluded from total</span>}
+                  </div>
+                  {item.note && (
+                    <div className="text-xs text-[var(--muted)] mt-1 whitespace-pre-wrap break-words">{item.note}</div>
                   )}
-                  {item.shippingType === "free" && <span className="text-[var(--muted)]">free shipping</span>}
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="font-[JetBrains_Mono,monospace] font-medium tabular-nums">{formatMoney(rowTotal, totals.target)}</div>
                 </div>
               </div>
-              <div className="text-right shrink-0">
-                <div className="font-[JetBrains_Mono,monospace] font-medium tabular-nums">{formatMoney(rowTotal, totals.target)}</div>
-              </div>
-            </button>
-          ))}
+            );
+          })}
+        </div>
+      )}
+
+      {selectMode && (
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-[var(--border)] bg-[var(--bg)] px-4 py-3 flex items-center gap-3">
+          <span className="text-sm text-[var(--muted)]">{selected.size} selected</span>
+          <div className="flex-1" />
+          <Button variant="ghost" onClick={exitSelectMode}>Cancel</Button>
+          <Button disabled={selected.size === 0} onClick={() => setShowCopyModal(true)}>Copy to…</Button>
         </div>
       )}
 
@@ -604,6 +742,16 @@ function CartDetailScreen({ cart, companies, rates, onBack, onEditMeta, onUpdate
           <div className="flex justify-between text-lg font-semibold pt-1"><span className="font-[Space_Grotesk,sans-serif]">Total</span><span className="tabular-nums">{formatMoney(totals.total, totals.target)}</span></div>
         </div>
       </div>
+
+      {showCopyModal && (
+        <CopyItemsModal
+          carts={carts}
+          currentCartId={cart.id}
+          count={selected.size}
+          onCancel={() => setShowCopyModal(false)}
+          onConfirm={handleConfirmCopy}
+        />
+      )}
     </div>
   );
 }
@@ -659,9 +807,10 @@ function CompaniesScreen({ companies, onNew, onEdit }) {
   );
 }
 
-function SettingsScreen({ settings, rates, onUpdateSettings, onRefresh, refreshing, refreshError, theme, onToggleTheme }) {
+function SettingsScreen({ settings, rates, onUpdateSettings, onRefresh, refreshing, refreshError, theme, onToggleTheme, onExportBackup, onImportBackup }) {
   const [keyDraft, setKeyDraft] = useState(settings.apiKey);
   useEffect(() => setKeyDraft(settings.apiKey), [settings.apiKey]);
+  const fileInputRef = useRef(null);
 
   const cooldownLeft = rates && settings.lastRefresh
     ? Math.max(0, REFRESH_COOLDOWN_MS - (Date.now() - settings.lastRefresh))
@@ -680,7 +829,7 @@ function SettingsScreen({ settings, rates, onUpdateSettings, onRefresh, refreshi
         </Button>
       </div>
 
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 mb-4">
         <h2 className="font-medium mb-1">Open Exchange Rates</h2>
         <p className="text-xs text-[var(--muted)] mb-3">Add your App ID to enable live currency conversion across items, carts, and companies.</p>
         <Field label="API key">
@@ -709,6 +858,24 @@ function SettingsScreen({ settings, rates, onUpdateSettings, onRefresh, refreshi
           )}
           {refreshError && <div className="text-[var(--danger)]">{refreshError}</div>}
         </div>
+      </div>
+
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+        <h2 className="font-medium mb-1">Backup</h2>
+        <p className="text-xs text-[var(--muted)] mb-3">Save all your carts, companies, and settings to a file, or restore from one.</p>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="subtle" onClick={onExportBackup}><Wallet size={15} /> Export backup</Button>
+          <Button variant="subtle" onClick={() => fileInputRef.current?.click()}><RefreshCw size={15} /> Import backup</Button>
+          <input
+            ref={fileInputRef} type="file" accept="application/json" className="hidden"
+            onChange={(e) => {
+              const f = e.target.files && e.target.files[0];
+              if (f) onImportBackup(f);
+              e.target.value = "";
+            }}
+          />
+        </div>
+        <p className="text-xs text-[var(--muted)] mt-2">Importing replaces everything currently in the app — you'll be asked to confirm first.</p>
       </div>
     </div>
   );
@@ -845,6 +1012,61 @@ export default function App() {
     setCompanyModal(null);
   }
 
+  function copyItems(itemIds, targetCartId) {
+    setData((d) => {
+      const source = d.carts.find((c) => c.id === activeCartId);
+      if (!source) return d;
+      const idSet = new Set(itemIds);
+      const clones = source.items.filter((i) => idSet.has(i.id)).map((i) => ({ ...i, id: uid() }));
+      if (clones.length === 0) return d;
+      return {
+        ...d,
+        carts: d.carts.map((c) => (c.id === targetCartId ? { ...c, items: [...c.items, ...clones] } : c))
+      };
+    });
+  }
+
+  function exportBackup() {
+    try {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const date = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `shipledger-backup-${date}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) { /* ignore */ }
+  }
+
+  function importBackup(file) {
+    const ok = window.confirm("Importing will replace all current carts, companies, and settings on this device. Continue?");
+    if (!ok) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!parsed || typeof parsed !== "object") throw new Error("Invalid file");
+        const base = defaultData();
+        const merged = {
+          ...base,
+          ...parsed,
+          settings: { ...base.settings, ...(parsed.settings || {}) },
+          companies: Array.isArray(parsed.companies) ? parsed.companies : [],
+          carts: Array.isArray(parsed.carts) ? parsed.carts : []
+        };
+        setData(merged);
+        setScreen("carts");
+        setActiveCartId(null);
+      } catch (e) {
+        window.alert("Couldn't read that file — make sure it's a ShipLedger backup JSON.");
+      }
+    };
+    reader.readAsText(file);
+  }
+
   async function refreshForex() {
     const key = data.settings.apiKey.trim();
     if (!key) return;
@@ -918,6 +1140,7 @@ export default function App() {
       {screen === "cart" && activeCart && (
         <CartDetailScreen
           cart={activeCart}
+          carts={data.carts}
           companies={data.companies}
           rates={data.rates}
           onBack={() => { setScreen("carts"); setActiveCartId(null); }}
@@ -925,6 +1148,7 @@ export default function App() {
           onUpdateCart={updateCart}
           onOpenItem={(item) => setItemModal(item)}
           onNewItem={() => setItemModal({ ...emptyItem(), _isNew: true })}
+          onCopyItems={copyItems}
         />
       )}
 
@@ -946,6 +1170,8 @@ export default function App() {
           refreshError={refreshError}
           theme={theme}
           onToggleTheme={toggleTheme}
+          onExportBackup={exportBackup}
+          onImportBackup={importBackup}
         />
       )}
 
