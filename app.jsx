@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import {
   Plus, Trash2, Pencil, ArrowLeft, Settings as SettingsIcon, Moon, Sun,
   RefreshCw, Package, ShoppingCart, X, Truck, Image as ImageIcon,
-  ChevronRight, AlertTriangle, Building2, Wallet, Check
+  ChevronRight, AlertTriangle, Building2, Wallet, Check, ExternalLink
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -71,9 +71,10 @@ const emptyCart = () => ({
 });
 
 const emptyItem = () => ({
-  id: uid(), name: "", image: "", platform: "", price: "", currency: "USD",
-  tax: "", note: "", weight: "", shippingType: "free",
+  id: uid(), name: "", image: "", platform: "", url: "", price: "", currency: "USD",
+  taxType: "percent", tax: "", taxFixedAmount: "", note: "", weight: "", shippingType: "free",
   fixedShippingAmount: "", fixedShippingCurrency: "USD", forwardCompanyId: "",
+  preShippingAmount: "", preShippingCurrency: "USD",
   includeInTotal: true
 });
 
@@ -128,21 +129,30 @@ function calcForwardShipping(weightKg, company) {
   return base + units * add;
 }
 
+// Returns { legs: [{amount, currency, label}], ok }. "ok" is false only when
+// shippingType is "forward" but no company has been picked yet.
 function calcItemShipping(item, companies) {
-  if (item.shippingType === "free") return { amount: 0, currency: item.currency, ok: true };
+  const legs = [];
   if (item.shippingType === "fixed") {
-    return { amount: num(item.fixedShippingAmount), currency: item.fixedShippingCurrency || item.currency, ok: true };
+    const amt = num(item.fixedShippingAmount);
+    if (amt) legs.push({ amount: amt, currency: item.fixedShippingCurrency || item.currency, label: "Shipping" });
+    return { legs, ok: true };
   }
   if (item.shippingType === "forward") {
     const company = companies.find((c) => c.id === item.forwardCompanyId);
-    if (!company) return { amount: 0, currency: item.currency, ok: false };
-    return { amount: calcForwardShipping(item.weight, company), currency: company.currency, ok: true };
+    if (!company) return { legs, ok: false };
+    legs.push({ amount: calcForwardShipping(item.weight, company), currency: company.currency, label: "Forwarding" });
+    const pre = num(item.preShippingAmount);
+    if (pre) legs.push({ amount: pre, currency: item.preShippingCurrency || item.currency, label: "To forwarding address" });
+    return { legs, ok: true };
   }
-  return { amount: 0, currency: item.currency, ok: true };
+  return { legs, ok: true }; // free
 }
 
 function calcItemCost(item) {
-  return num(item.price) * (1 + num(item.tax) / 100);
+  const price = num(item.price);
+  if (item.taxType === "fixed") return price + num(item.taxFixedAmount);
+  return price * (1 + num(item.tax) / 100);
 }
 
 function calcCartTotals(cart, rates, companies) {
@@ -156,11 +166,16 @@ function calcCartTotals(cart, rates, companies) {
     const baseConv = convert(base, item.currency, target, rates);
     const ship = calcItemShipping(item, companies);
     if (!ship.ok && included) missingCompany = true;
-    const shipConv = ship.amount ? convert(ship.amount, ship.currency, target, rates) : 0;
-    if (included && (baseConv === null || (ship.amount && shipConv === null))) missingRate = true;
-    const rowTotal = (baseConv || 0) + (shipConv || 0);
+    let shipConvTotal = 0;
+    let shipMissing = false;
+    ship.legs.forEach((leg) => {
+      const c = convert(leg.amount, leg.currency, target, rates);
+      if (c === null) shipMissing = true; else shipConvTotal += c;
+    });
+    if (included && (baseConv === null || shipMissing)) missingRate = true;
+    const rowTotal = (baseConv || 0) + shipConvTotal;
     if (included) subtotal += rowTotal;
-    return { item, base, shipAmount: ship.amount, shipCurrency: ship.currency, rowTotal, included };
+    return { item, base, shipLegs: ship.legs, rowTotal, included };
   });
   let feeAmount = 0;
   if (cart.cardFeeType === "percent") {
@@ -334,6 +349,10 @@ function ItemForm({ initial, companies, onSave, onClose, onDelete }) {
         </datalist>
       </Field>
 
+      <Field label="Item URL" hint="Link to the listing, so you can jump back to it later">
+        <TextInput value={item.url} onChange={(e) => set("url", e.target.value)} placeholder="https://…" />
+      </Field>
+
       <div className="grid grid-cols-2 gap-3">
         <Field label="Price">
           <TextInput type="number" step="0.01" value={item.price} onChange={(e) => set("price", e.target.value)} placeholder="0.00" />
@@ -343,11 +362,37 @@ function ItemForm({ initial, companies, onSave, onClose, onDelete }) {
         </Field>
       </div>
 
-      <Field label="Tax" hint="Percentage applied on top of price">
-        <div className="relative">
-          <TextInput type="number" step="0.01" value={item.tax} onChange={(e) => set("tax", e.target.value)} placeholder="0" />
-          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-[var(--muted)]">%</span>
+      <Field label="Tax">
+        <div className="flex gap-2 mb-2">
+          {[
+            { v: "percent", label: "Percentage" },
+            { v: "fixed", label: "Fixed amount" }
+          ].map((opt) => (
+            <button
+              key={opt.v} type="button" onClick={() => set("taxType", opt.v)}
+              className={`flex-1 rounded-lg border px-2 py-2 text-sm font-medium transition-colors ${
+                (item.taxType || "percent") === opt.v
+                  ? "bg-[var(--accent)] text-white border-[var(--accent)]"
+                  : "border-[var(--border)] text-[var(--text)] hover:bg-[var(--surface-2)]"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
+        {(item.taxType || "percent") === "percent" ? (
+          <div className="relative">
+            <TextInput type="number" step="0.01" value={item.tax} onChange={(e) => set("tax", e.target.value)} placeholder="0" />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-[var(--muted)]">%</span>
+          </div>
+        ) : (
+          <TextInput type="number" step="0.01" value={item.taxFixedAmount} onChange={(e) => set("taxFixedAmount", e.target.value)} placeholder="0.00" />
+        )}
+        <span className="block text-xs mt-1 text-[var(--muted)]">
+          {(item.taxType || "percent") === "percent"
+            ? "Percentage applied on top of price."
+            : `Exact tax amount in ${item.currency || "the item's currency"} — handy for US sales tax, which varies by state/zip and doesn't reduce to one clean rate.`}
+        </span>
       </Field>
 
       <Field label="Note">
@@ -416,12 +461,29 @@ function ItemForm({ initial, companies, onSave, onClose, onDelete }) {
               </select>
             </Field>
           )}
-          <div className="rounded-lg bg-[var(--surface-2)] px-3 py-2 text-sm font-[JetBrains_Mono,monospace]">
-            {previewShip.ok
-              ? <>Estimated shipping: <strong>{formatMoney(previewShip.amount, previewShip.currency)}</strong></>
-              : <span className="text-[var(--muted)]">Select a company to estimate cost</span>}
+
+          <Field label="Shipping to forwarding address" hint="Optional — what the seller charges to get it to your forwarder's warehouse, if it's not already free/included">
+            <div className="grid grid-cols-2 gap-3">
+              <TextInput type="number" step="0.01" value={item.preShippingAmount} onChange={(e) => set("preShippingAmount", e.target.value)} placeholder="0.00" />
+              <CurrencySelect value={item.preShippingCurrency} onChange={(v) => set("preShippingCurrency", v)} id="cur-preship" />
+            </div>
+          </Field>
+
+          <div className="rounded-lg bg-[var(--surface-2)] px-3 py-2 text-sm font-[JetBrains_Mono,monospace] space-y-0.5">
+            {previewShip.ok ? (
+              previewShip.legs.length === 0
+                ? <span className="text-[var(--muted)]">No shipping cost yet</span>
+                : previewShip.legs.map((leg, i) => (
+                    <div key={i} className="flex justify-between gap-3">
+                      <span className="text-[var(--muted)] font-sans">{leg.label}</span>
+                      <strong>{formatMoney(leg.amount, leg.currency)}</strong>
+                    </div>
+                  ))
+            ) : (
+              <span className="text-[var(--muted)]">Select a company to estimate cost</span>
+            )}
           </div>
-          <p className="text-xs text-[var(--muted)] mt-1">Priced per 0.5kg tier — the base rate covers the first 0.5kg, then each additional (or partial) 0.5kg is charged at the additional rate.</p>
+          <p className="text-xs text-[var(--muted)] mt-1">Forwarding is priced per 0.5kg tier — the base rate covers the first 0.5kg, then each additional (or partial) 0.5kg is charged at the additional rate.</p>
         </div>
       )}
 
@@ -659,10 +721,20 @@ function CartDetailScreen({ cart, carts, companies, rates, onBack, onEditMeta, o
                 )}
                 <ImageThumb src={item.image} />
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium break-words">{item.name}</div>
+                  <div className="font-medium break-words flex items-center gap-1.5">
+                    <span>{item.name}</span>
+                    {item.url && (
+                      <a
+                        href={item.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+                        className="text-[var(--muted)] hover:text-[var(--accent)] shrink-0" aria-label="Open item link"
+                      >
+                        <ExternalLink size={13} />
+                      </a>
+                    )}
+                  </div>
                   <div className="text-xs text-[var(--muted)] flex items-center gap-1.5 flex-wrap mt-0.5">
                     {item.platform && <span>{item.platform}</span>}
-                    <span className="font-[JetBrains_Mono,monospace]">{formatMoney(num(item.price) * (1 + num(item.tax) / 100), item.currency)}</span>
+                    <span className="font-[JetBrains_Mono,monospace]">{formatMoney(calcItemCost(item), item.currency)}</span>
                     {item.shippingType === "forward" && (
                       <span className="inline-flex items-center gap-0.5 text-[var(--accent-2)]"><Truck size={11} /> forwarded</span>
                     )}
